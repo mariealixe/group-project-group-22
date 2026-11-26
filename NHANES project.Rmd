@@ -11,8 +11,8 @@ library(skimr)
 ```
 
 ```{r}
-nhanes_merged <- read_csv("NHANES_20212023_merged_filtered 1.csv")
-nhanes_codebook <- read_csv("NHANES_20212023_codebook_filtered 1.csv")
+nhanes_merged <- read_csv("./data/NHANES_20212023_merged_filtered 1.csv")
+nhanes_codebook <- read_csv("./data/NHANES_20212023_codebook_filtered 1.csv")
 
 nrow(nhanes_merged)
 ncol(nhanes_merged)
@@ -260,3 +260,4 @@ boxplot(nhanes_75$LBXTC,
 boxplot(nhanes_75$INDFMPIR,
         main = "Income-to-poverty ratio")
 ```
+#Caitlin was hier 
