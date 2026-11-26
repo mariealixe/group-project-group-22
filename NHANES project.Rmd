@@ -1,0 +1,262 @@
+---
+title: "NHANES dataset project"
+output: html_document
+date: "2026-11-19"
+---
+
+```{r}
+library(tidyverse) 
+library(haven)     
+library(skimr)
+```
+
+```{r}
+nhanes_merged <- read_csv("NHANES_20212023_merged_filtered 1.csv")
+nhanes_codebook <- read_csv("NHANES_20212023_codebook_filtered 1.csv")
+
+nrow(nhanes_merged)
+ncol(nhanes_merged)
+n_distinct(nhanes_merged$SEQN)
+sum(duplicated(nhanes_merged))
+```
+The dataset contains 11,933 participants and 486 variables. 
+
+# How many samples and features are there, and what is each variable type (nominal, ordinal, continuous, discrete)?
+
+What does the dataset look like? 
+```{r}
+head(nhanes_merged)
+glimpse(nhanes_merged)
+summary(nhanes_merged)
+```
+
+All variables are categorised as numerical values 
+Look at codebook to see if those variables are actually all numerical values.
+
+```{r}
+type_df <- tibble(
+  variable    = names(nhanes_merged),
+  is_num      = sapply(nhanes_merged, is.numeric),
+  n_unique    = sapply(nhanes_merged, n_distinct, na.rm = TRUE),
+  all_integer = sapply(nhanes_merged, function(x) is.numeric(x) && all(x == round(x), na.rm = TRUE))
+) %>%
+  left_join(nhanes_codebook, by = "variable") %>%
+  mutate(type_guess = case_when(
+    !is_num                         ~ "nominal (text)",
+    n_unique == 2                   ~ "binary (nominal)",
+    n_unique <= 10 & all_integer    ~ "categorical (nominal/ordinal) - check codebook",
+    all_integer & n_unique <= 30    ~ "discrete (count)",
+    TRUE                            ~ "continuous"
+  ))
+
+table(type_df$type_guess)
+```
+
+After import, 485 variables were stored as numeric (<dbl>) and one (BPAOARM) as character. However, NHANES stores categorical variables as numeric codes (e.g. sex: 1 = male, 2 = female), so the R data type does not reflect the real variable type. The codebook was therefore used to classify variables as nominal, ordinal, discrete or continuous.
+
+```{r}
+names(nhanes_codebook)
+head(nhanes_codebook)
+```
+The NHANES dataset contained 11,933 participants and 486 variables. The accompanying codebook showed that variables originate from several NHANES components, including demographic characteristics, examination measurements, laboratory biomarkers and questionnaire-derived variables.
+
+```{r}
+sort(table(nhanes_codebook$component),
+     decreasing = TRUE)
+```
+The dataset contained 11,933 participants and 486 variables. Based on the codebook, variables were grouped into four main NHANES components: Laboratory (n = 387), Questionnaire (n = 40), Examination (n = 32) and Demographics (n = 27). The dataset is therefore largely composed of laboratory measurements
+
+```{r}
+nhanes_codebook[nhanes_codebook$variable == "RIAGENDR", ]
+```
+Although most variables were imported as numeric (double) values in R, they represented different data types. Examples include nominal variables (sex), ordinal variables (education level), discrete variables (household size) and continuous variables (age, BMI and laboratory measurements)
+
+
+# Where are the missing values, why might they be missing, should missingness be handled and how?
+
+hidden missing values
+
+In NHANES questionnaire variables, answers such as "refused" (7) and "don't know" (9) are stored as numbers, so R does not recognise them as missing. For example, DMDEDUC2 (education level, scale 1-5) contained the value 9 for 11 participants. Left unchanged, these values would be treated as a real education level and bias any summary or model. We recoded these codes to NA for the variables where the NHANES documentation confirmed their meaning. This was done before calculating missingness so that the missing-value percentages and the filtering threshold are based on all truly absent information. The recoding was not applied automatically to all variables, because in some variables (e.g. counts) 7 or 9 is a valid value.
+
+```{r}
+cat_vars <- type_df %>%
+  filter(type_guess %in% c("binary (nominal)", "categorical (nominal/ordinal) - check codebook")) %>%
+  pull(variable)
+
+special_found <- sapply(cat_vars, function(v) {
+  vals <- unique(nhanes_merged[[v]])
+  paste(sort(intersect(vals, c(7, 9, 77, 99, 777, 999))), collapse = ", ")
+})
+special_found[special_found != ""]
+```
+
+```{r}
+missing_pct <- colMeans(is.na(nhanes_merged)) * 100
+
+summary(missing_pct)
+
+sort(missing_pct, decreasing = TRUE)[1:20]
+```
+Missing values were common throughout the dataset. While some variables contained no missing observations, the median percentage of missing values per variable was 41.2% and the average percentage was 53.5%. Furthermore, 25% of all variables contained more than 75% missing data. Several variables exhibited nearly complete missingness (>99%), often because measurements were only collected for specific subpopulations. Therefore, missingness appears to be partly related to the NHANES study design rather than solely resulting from data quality issues.
+
+```{r}
+head(sort(missing_pct), 30)
+
+sum(missing_pct > 75)
+sum(missing_pct > 50)
+sum(missing_pct > 25)
+```
+Applying different missing-value thresholds showed that 156 variables contained more than 75% missing data and 191 variables more than 50% missing data. This highlights the substantial amount of missingness present in the dataset and indicates that filtering and/or imputation strategies will need to be considered during preprocessing.
+
+distribution van missing variables:
+```{r}
+library(ggplot2)
+
+missing_df <- data.frame(
+  variable = names(nhanes_merged),
+  missing_pct = colMeans(is.na(nhanes_merged)) * 100
+)
+
+ggplot(missing_df, aes(x = missing_pct)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "black") +
+  labs(
+    title = "Distribution of missing values across variables",
+    x = "Percentage missing values",
+    y = "Number of variables"
+  ) +
+  theme_minimal()
+```
+```{r}
+missing_df <- data.frame(
+  variable = names(nhanes_merged),
+  missing_pct = colMeans(is.na(nhanes_merged)) * 100
+)
+
+ggplot(missing_df,
+       aes(x = reorder(variable, missing_pct),
+           y = missing_pct)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Missingness per variable",
+    x = "Variable",
+    y = "Percentage missing values"
+  ) +
+  theme_minimal()
+```
+```{r}
+missing_df <- merge(
+  missing_df,
+  nhanes_codebook[, c("variable", "component")],
+  by = "variable"
+)
+
+head(missing_df)
+```
+```{r}
+ggplot(
+  missing_df,
+  aes(x = component,
+      y = missing_pct,
+      fill = component)
+) +
+  geom_boxplot() +
+  labs(
+    title = "Missingness by NHANES component",
+    x = "Component",
+    y = "Percentage missing values"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+Missingness was not uniformly distributed across the NHANES components. Demographic variables generally exhibited the lowest proportion of missing values and included several variables with complete data availability, whereas questionnaire variables showed the highest levels of missingness. Laboratory and examination variables displayed intermediate levels of missingness, although considerable variability was observed between individual measurements. This pattern is consistent with the NHANES survey design, in which demographic information is collected from nearly all participants, while many questionnaire items, examinations and laboratory measurements are administered only to specific target populations, participants attending the Mobile Examination Center (MEC), or selected subsamples. Consequently, a substantial proportion of the observed missingness is likely related to study design and participant eligibility criteria rather than data quality issues alone. As missingness appears to be associated with known and observed study characteristics, the observed pattern is more consistent with a Missing At Random (MAR) mechanism than with Missing Completely At Random (MCAR). 
+
+```{r}
+is_adult <- nhanes_merged$RIDAGEYR >= 20
+
+cmp <- tibble(
+  variable      = names(nhanes_merged),
+  miss_adults   = colMeans(is.na(nhanes_merged[is_adult, ])) * 100,
+  miss_children = colMeans(is.na(nhanes_merged[!is_adult, ])) * 100
+) %>% filter(variable != "SEQN")
+
+ggplot(cmp, aes(x = miss_adults, y = miss_children)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(title = "Missingness in adults versus children",
+       x = "% missing in adults (>= 20 y)", y = "% missing in children (< 20 y)")
+```
+
+Should missingness be handled? 
+
+Given the substantial amount of missing data observed across the dataset, a missingness threshold of 75% was considered during preprocessing. Applying this threshold reduced the number of variables from 486 to 330, while retaining all 11,933 participants. As a result, 156 variables with very high levels of missingness were excluded from further consideration. This approach reduces the influence of sparsely populated variables while preserving the majority of the available information for subsequent analyses.
+
+```{r}
+nhanes_75 <- nhanes_merged[, missing_pct <= 75]
+
+dim(nhanes_75)
+```
+```{r}
+table(nhanes_codebook$component[
+  nhanes_codebook$variable %in%
+    names(nhanes_merged)[missing_pct > 75]
+])
+```
+Applying a 75% missingness threshold reduced the number of variables from 486 to 330, resulting in the exclusion of 156 variables. Most excluded variables originated from the laboratory component (n = 115), followed by questionnaire variables (n = 24), examination variables (n = 12) and demographic variables (n = 5). This suggests that the threshold primarily removes highly specialised laboratory measurements and selected questionnaire variables with limited data availability, while retaining the majority of demographic and examination information
+
+
+Given the large number of retained variables (n = 330), a thematic focus was necessary for subsequent analyses. We chose to focus on cardiometabolic health, as the dataset contained a combination of demographic variables, anthropometric measurements and laboratory biomarkers that are known to be associated with cardiovascular and metabolic disease risk. This theme is well represented within the NHANES dataset and provides suitable variables for multivariable modelling, multiple-testing analyses and machine-learning applications in later project stages
+
+Within this cardiometabolic framework, age (RIDAGEYR), sex (RIAGENDR), BMI (BMXBMI), total cholesterol (LBXTC) and income-to-poverty ratio (INDFMPIR) were selected as candidate variables for further exploration. These variables are biologically relevant, commonly used in epidemiological research and potentially suitable for addressing multivariable research questions in the subsequent project parts.
+
+are the variables present in the threshold dataset?
+
+```{r}
+c("RIDAGEYR",
+  "RIAGENDR",
+  "BMXBMI",
+  "LBXTC",
+  "INDFMPIR") %in% names(nhanes_75)
+```
+#Are there samples or features that behave unlike the rest? Is that a technical error or interesting biology?
+
+#Are there pre-processing steps needed on the data (normalization, log-transformation, standardization, filtering, etc)?
+
+```{r}
+summary(nhanes_75$RIDAGEYR)
+summary(nhanes_75$BMXBMI)
+summary(nhanes_75$LBXTC)
+summary(nhanes_75$INDFMPIR)
+```
+```{r}
+par(mfrow = c(2,2))
+
+hist(nhanes_75$RIDAGEYR,
+     main = "Age")
+
+hist(nhanes_75$BMXBMI,
+     main = "BMI")
+
+hist(nhanes_75$LBXTC,
+     main = "Total cholesterol")
+
+hist(nhanes_75$INDFMPIR,
+     main = "Income-to-poverty ratio")
+```
+```{r}
+par(mfrow = c(2,2))
+
+boxplot(nhanes_75$RIDAGEYR,
+        main = "Age")
+
+boxplot(nhanes_75$BMXBMI,
+        main = "BMI")
+
+boxplot(nhanes_75$LBXTC,
+        main = "Total cholesterol")
+
+boxplot(nhanes_75$INDFMPIR,
+        main = "Income-to-poverty ratio")
+```
