@@ -260,4 +260,4 @@ boxplot(nhanes_75$LBXTC,
 boxplot(nhanes_75$INDFMPIR,
         main = "Income-to-poverty ratio")
 ```
-#Caitlin was hier 
+ 
